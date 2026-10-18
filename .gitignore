@@ -1,0 +1,21 @@
+# Build output
+/target
+**/target
+/out
+
+# Rust tooling
+**/*.rs.bk
+*.pdb
+*.profraw
+*.profdata
+
+# Local cargo overrides
+.cargo/credentials
+.cargo/credentials.toml
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

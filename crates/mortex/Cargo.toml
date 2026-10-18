@@ -1,0 +1,13 @@
+[package]
+name = "mortex"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ddsfile = "0.6.0"
+texpresso = "2.0.2"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+morvfs = { path = "../morvfs" }

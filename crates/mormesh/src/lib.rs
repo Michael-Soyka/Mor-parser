@@ -66,6 +66,8 @@ use std::io::Read as _;
 use encoding_rs::WINDOWS_1251;
 use flate2::read::ZlibDecoder;
 
+#[ cfg( feature = "gltf" ) ]
+pub mod gltf;
 pub mod layout;
 pub mod lightmap;
 

@@ -1,0 +1,11 @@
+[package]
+name = "mormesh"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+encoding_rs = "0.8.42"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+morvfs = { path = "../morvfs" }

@@ -188,6 +188,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mormesh"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "morvfs",
+ "thiserror",
+]
+
+[[package]]
 name = "mortex"
 version = "0.1.0"
 dependencies = [

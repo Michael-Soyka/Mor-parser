@@ -61,6 +61,8 @@
 
 use encoding_rs::WINDOWS_1251;
 
+pub mod lightmap;
+
 pub const EXTENSION: &str = "mesh";
 
 const STATIC_MARKER: u32 = 0;
@@ -125,6 +127,9 @@ pub enum Error
 
     #[ error( "mesh is too large" ) ]
     TooLarge,
+
+    #[ error( "lightmap image data is corrupt" ) ]
+    CorruptLightmap,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -196,7 +201,7 @@ pub struct LightmapPage
     pub width:  u32,
     pub height: u32,
 
-    /// Two images in the engine's own compressed format.
+    /// Two images in the engine's own compressed format, see [`LightmapPage::decode`].
     pub images: [Vec<u8>; 2],
 
     pub vertices: Vec<LightmapVertex>,
@@ -208,6 +213,17 @@ pub struct LightmapPage
     pub source_triangles: Vec<u16>,
 
     pub param: f32,
+}
+
+impl LightmapPage
+{
+    /// Both images as their [`lightmap::LEVELS`] mip levels of 8-bit luminance.
+    pub fn decode( &self ) -> Result<[Vec<lightmap::LightmapLevel>; 2]>
+    {
+        let [ first, second ] = &self.images;
+        let decoded = [ lightmap::decode( first, self.width, self.height )?, lightmap::decode( second, self.width, self.height )? ];
+        Ok( decoded )
+    }
 }
 
 #[ derive( Debug, Clone, PartialEq ) ]

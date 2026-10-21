@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use mormesh::{ LandMesh, Material, StaticMesh };
+use mormesh::{ LandMesh, Material, Mesh, StaticMesh };
 use morvfs::Vfs;
 
 fn geometries() -> Option<Vfs>
@@ -52,4 +52,46 @@ fn parses_terrain_tiles()
             assert!( ( x - center_x ).abs() <= half_x + tolerance && ( z - center_z ).abs() <= half_z + tolerance );
         }
     }
+}
+
+fn fnv1a( bytes: &[u8] ) -> u64
+{
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME:        u64 = 0x0100_0000_01b3;
+    bytes.iter().fold( OFFSET_BASIS, |hash, &byte| ( hash ^ u64::from( byte ) ).wrapping_mul( PRIME ) )
+}
+
+/// Fingerprints of the first level, taken from the game's own decoder run in an emulator.
+#[ test ]
+fn decodes_altar_lightmap_like_the_game()
+{
+    let Some( vfs ) = geometries() else { return };
+    let mesh = StaticMesh::parse( &vfs.read( "altar_out.mesh" ).unwrap() ).unwrap();
+    let page = &mesh.surfaces[ 0 ].lightmaps[ 0 ].pages[ 0 ];
+    let [ first, second ] = page.decode().unwrap();
+
+    let sizes: Vec<( u32, u32 )> = first.iter().map( |level| ( level.width, level.height ) ).collect();
+    assert_eq!( sizes, [ ( 256, 256 ), ( 128, 128 ), ( 64, 64 ), ( 32, 32 ) ] );
+    assert_eq!( fnv1a( &first[ 0 ].luminance ), 0x26e3_6ae1_3f59_085b );
+    assert_eq!( fnv1a( &second[ 0 ].luminance ), 0xeb9b_6c9a_52af_dad2 );
+}
+
+#[ test ]
+fn decodes_every_lightmap_page()
+{
+    let Some( vfs ) = geometries() else { return };
+    let mut reader = vfs.reader().unwrap();
+    let mut pages = 0;
+    for entry in vfs.entries()
+    {
+        let Ok( mesh ) = Mesh::parse( &reader.read_entry( entry ).unwrap() ) else { continue };
+        for page in mesh.surfaces().flat_map( |surface| &surface.lightmaps ).flat_map( |lightmap| &lightmap.pages )
+        {
+            page.decode().unwrap_or_else( |err| panic!( "{}: {err}", entry.path ) );
+            pages += 1;
+        }
+    }
+
+    // 17839 in static meshes, 100 in the terrain.
+    assert_eq!( pages, 17839 + 100 );
 }

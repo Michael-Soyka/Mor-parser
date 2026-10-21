@@ -64,6 +64,19 @@ fn groups( mesh: &Mesh ) -> Vec<Group<'_>>
         };
         return vec![ group ];
     }
+    if let Mesh::Character( character ) = mesh
+    {
+        let group = Group
+        {
+            name:      "character".into(),
+            texture:   Some( &character.texture ),
+            positions: &character.positions,
+            normals:   &character.normals,
+            uvs:       &character.uvs,
+            triangles: &character.triangles,
+        };
+        return vec![ group ];
+    }
     if let Mesh::Water( water ) = mesh
     {
         let group = Group

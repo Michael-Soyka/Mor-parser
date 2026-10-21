@@ -1,8 +1,9 @@
 //! Parser for Pathologic (Mor. Utopia) `.mesh` geometry.
 //!
 //! The engine picks the layout from the kind of object it loads; [`Mesh::parse`] tells them
-//! apart by the leading zero and by which layout consumes the file exactly. Interiors and
-//! vegetation share the extension but use other layouts, see [`layout::interior`] and [`layout::detail`].
+//! apart by the leading zero and by which layout consumes the file exactly. Interiors,
+//! vegetation and characters share the extension but use other layouts,
+//! see [`layout::interior`], [`layout::detail`] and [`layout::character`].
 //!
 //! Layout, all little-endian:
 //!
@@ -127,7 +128,7 @@ pub enum Error
     #[ error( "{what} index {index} out of range for {count} items" ) ]
     IndexOutOfRange { what: &'static str, index: u32, count: usize },
 
-    #[ error( "not a static, movable, land, interior, vegetation, water or raw mesh" ) ]
+    #[ error( "not a static, movable, land, interior, vegetation, character, water or raw mesh" ) ]
     UnknownLayout,
 
     #[ error( "mesh is too large" ) ]
@@ -362,6 +363,7 @@ pub enum Mesh
     Land( LandMesh ),
     Interior( layout::interior::InteriorMesh ),
     Detail( layout::detail::DetailMesh ),
+    Character( layout::character::CharacterMesh ),
     Water( WaterMesh ),
     Raw( RawMesh ),
 }
@@ -965,7 +967,8 @@ impl WaterMesh
 impl Mesh
 {
     /// The file itself does not name its kind, the engine knows it from where the mesh is used.
-    /// Static when the file starts with a zero, otherwise movable, land, interior, vegetation, water or raw, whichever reads the whole file.
+    /// Static when the file starts with a zero, otherwise movable, land, interior, vegetation, character,
+    /// water or raw, whichever reads the whole file.
     pub fn parse( data: &[u8] ) -> Result<Self>
     {
         if data.starts_with( &STATIC_MARKER.to_le_bytes() )
@@ -988,6 +991,10 @@ impl Mesh
         {
             return Ok( Self::Detail( mesh ) );
         }
+        if let Ok( mesh ) = layout::character::CharacterMesh::parse( data )
+        {
+            return Ok( Self::Character( mesh ) );
+        }
         if let Ok( mesh ) = WaterMesh::parse( data )
         {
             return Ok( Self::Water( mesh ) );
@@ -1003,7 +1010,7 @@ impl Mesh
             Self::Static( mesh ) => ( &mesh.surfaces, &[] ),
             Self::Movable( mesh ) => ( &mesh.surfaces, &[] ),
             Self::Land( mesh ) => ( &[], &mesh.tiles ),
-            Self::Interior( _ ) | Self::Detail( _ ) | Self::Water( _ ) | Self::Raw( _ ) => ( &[], &[] ),
+            Self::Interior( _ ) | Self::Detail( _ ) | Self::Character( _ ) | Self::Water( _ ) | Self::Raw( _ ) => ( &[], &[] ),
         };
         surfaces.iter().chain( tiles.iter().flat_map( |tile| &tile.surfaces ) )
     }

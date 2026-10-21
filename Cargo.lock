@@ -178,6 +178,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "morft"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "indexmap",
+ "morvfs",
+ "thiserror",
+]
+
+[[package]]
 name = "mortex"
 version = "0.1.0"
 dependencies = [

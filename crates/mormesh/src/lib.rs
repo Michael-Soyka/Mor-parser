@@ -1,8 +1,8 @@
 //! Parser for Pathologic (Mor. Utopia) `.mesh` geometry.
 //!
 //! The engine picks the layout from the kind of object it loads; [`Mesh::parse`] tells them
-//! apart by the leading zero and by which layout consumes the file exactly. Interiors
-//! share the extension but use another layout, see [`layout::interior`].
+//! apart by the leading zero and by which layout consumes the file exactly. Interiors and
+//! vegetation share the extension but use other layouts, see [`layout::interior`] and [`layout::detail`].
 //!
 //! Layout, all little-endian:
 //!
@@ -60,7 +60,10 @@
 //! Lightmap vertices repeat every attribute of their source vertex except the lightmap uv;
 //! only the source index and the uv are kept.
 
+use std::io::Read as _;
+
 use encoding_rs::WINDOWS_1251;
+use flate2::read::ZlibDecoder;
 
 pub mod layout;
 pub mod lightmap;
@@ -124,7 +127,7 @@ pub enum Error
     #[ error( "{what} index {index} out of range for {count} items" ) ]
     IndexOutOfRange { what: &'static str, index: u32, count: usize },
 
-    #[ error( "not a static, movable, land, interior, water or raw mesh" ) ]
+    #[ error( "not a static, movable, land, interior, vegetation, water or raw mesh" ) ]
     UnknownLayout,
 
     #[ error( "mesh is too large" ) ]
@@ -132,6 +135,9 @@ pub enum Error
 
     #[ error( "lightmap image data is corrupt" ) ]
     CorruptLightmap,
+
+    #[ error( "zlib stream is corrupt" ) ]
+    CorruptStream,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -355,6 +361,7 @@ pub enum Mesh
     Movable( MovableMesh ),
     Land( LandMesh ),
     Interior( layout::interior::InteriorMesh ),
+    Detail( layout::detail::DetailMesh ),
     Water( WaterMesh ),
     Raw( RawMesh ),
 }
@@ -371,6 +378,25 @@ fn check_index( what: &'static str, index: u32, count: usize ) -> Result<()>
         return Ok( () );
     }
     Err( Error::IndexOutOfRange { what, index, count } )
+}
+
+/// Unpacks `u32 compressed_length, zlib stream`; returns the unpacked data and the bytes after the stream.
+fn unpack_zlib( data: &[u8] ) -> Result<(Vec<u8>, &[u8])>
+{
+    let mut reader = Reader::new( data );
+    let compressed_length = reader.count()?;
+    let compressed = reader.bytes( compressed_length )?;
+
+    let mut decoder = ZlibDecoder::new( compressed );
+    let mut unpacked = Vec::new();
+    decoder.read_to_end( &mut unpacked ).map_err( |_| Error::CorruptStream )?;
+    if decoder.total_in() != u64::try_from( compressed_length ).map_err( |_| Error::TooLarge )?
+    {
+        return Err( Error::CorruptStream );
+    }
+
+    let unpacked = ( unpacked, &data[ reader.pos.. ] );
+    Ok( unpacked )
 }
 
 fn sign_extend( value: u32, bits: u32 ) -> i32
@@ -939,7 +965,7 @@ impl WaterMesh
 impl Mesh
 {
     /// The file itself does not name its kind, the engine knows it from where the mesh is used.
-    /// Static when the file starts with a zero, otherwise movable, land, interior, water or raw, whichever reads the whole file.
+    /// Static when the file starts with a zero, otherwise movable, land, interior, vegetation, water or raw, whichever reads the whole file.
     pub fn parse( data: &[u8] ) -> Result<Self>
     {
         if data.starts_with( &STATIC_MARKER.to_le_bytes() )
@@ -958,6 +984,10 @@ impl Mesh
         {
             return Ok( Self::Interior( mesh ) );
         }
+        if let Ok( mesh ) = layout::detail::DetailMesh::parse( data )
+        {
+            return Ok( Self::Detail( mesh ) );
+        }
         if let Ok( mesh ) = WaterMesh::parse( data )
         {
             return Ok( Self::Water( mesh ) );
@@ -973,7 +1003,7 @@ impl Mesh
             Self::Static( mesh ) => ( &mesh.surfaces, &[] ),
             Self::Movable( mesh ) => ( &mesh.surfaces, &[] ),
             Self::Land( mesh ) => ( &[], &mesh.tiles ),
-            Self::Interior( _ ) | Self::Water( _ ) | Self::Raw( _ ) => ( &[], &[] ),
+            Self::Interior( _ ) | Self::Detail( _ ) | Self::Water( _ ) | Self::Raw( _ ) => ( &[], &[] ),
         };
         surfaces.iter().chain( tiles.iter().flat_map( |tile| &tile.surfaces ) )
     }

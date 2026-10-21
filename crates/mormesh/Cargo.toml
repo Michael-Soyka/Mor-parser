@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 encoding_rs = "0.8.42"
+flate2 = "1.1.10"
 thiserror = "2.0.21"
 
 [dev-dependencies]

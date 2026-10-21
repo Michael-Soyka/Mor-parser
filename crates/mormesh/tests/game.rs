@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-use mormesh::{ LandMesh, Material, Mesh, StaticMesh };
+use mormesh::layout::detail::DetailMesh;
+use mormesh::{ EXTENSION, LandMesh, Material, Mesh, RawMesh, StaticMesh };
 use morvfs::Vfs;
 
 fn geometries() -> Option<Vfs>
@@ -52,6 +53,43 @@ fn parses_terrain_tiles()
             assert!( ( x - center_x ).abs() <= half_x + tolerance && ( z - center_z ).abs() <= half_z + tolerance );
         }
     }
+}
+
+#[ test ]
+fn places_vegetation_on_raw_prototypes()
+{
+    let Some( vfs ) = geometries() else { return };
+    let mut reader = vfs.reader().unwrap();
+    let ( mut meshes, mut tilted, mut instances ) = ( 0, 0, 0 );
+    for entry in vfs.entries()
+    {
+        let Ok( mesh ) = DetailMesh::parse( &reader.read_entry( entry ).unwrap() ) else { continue };
+        for prototype in &mesh.prototypes
+        {
+            RawMesh::parse( &reader.read( &format!( "{prototype}.{EXTENSION}" ) ).unwrap() ).unwrap_or_else( |err| panic!( "{prototype}: {err}" ) );
+        }
+
+        let [ x0, z0 ] = mesh.origin.map( f64::from );
+        let [ width, depth ] = mesh.cell_size.map( f64::from );
+        let max_offset = f64::from( u8::MAX );
+        let x_end = x0 + ( f64::from( mesh.columns ) * width ) + max_offset;
+        let z_end = z0 + ( f64::from( mesh.rows ) * depth ) + max_offset;
+        for instance in mesh.instances()
+        {
+            let [ x, _, z ] = instance.position.map( f64::from );
+            assert!( ( x0..=x_end ).contains( &x ) && ( z0..=z_end ).contains( &z ), "{}", entry.path );
+            assert!( ( 0.0..=std::f32::consts::TAU ).contains( &instance.yaw ) );
+
+            let length: f32 = instance.rotation().iter().map( |value| value * value ).sum();
+            assert!( ( length - 1.0 ).abs() < 1e-3, "{}", entry.path );
+        }
+
+        meshes += 1;
+        tilted += usize::from( mesh.instances().any( |instance| instance.tilt.is_some() ) );
+        instances += mesh.instances().count();
+    }
+    assert_eq!( ( meshes, tilted ), ( 82, 5 ) );
+    assert!( instances > 0 );
 }
 
 fn fnv1a( bytes: &[u8] ) -> u64

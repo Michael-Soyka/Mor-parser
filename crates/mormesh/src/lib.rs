@@ -1,7 +1,8 @@
 //! Parser for Pathologic (Mor. Utopia) `.mesh` geometry.
 //!
 //! The engine picks the layout from the kind of object it loads; [`Mesh::parse`] tells them
-//! apart by the leading zero and by which layout consumes the file exactly.
+//! apart by the leading zero and by which layout consumes the file exactly. Interiors
+//! share the extension but use another layout, see [`layout::interior`].
 //!
 //! Layout, all little-endian:
 //!
@@ -61,6 +62,7 @@
 
 use encoding_rs::WINDOWS_1251;
 
+pub mod layout;
 pub mod lightmap;
 
 pub const EXTENSION: &str = "mesh";
@@ -122,7 +124,7 @@ pub enum Error
     #[ error( "{what} index {index} out of range for {count} items" ) ]
     IndexOutOfRange { what: &'static str, index: u32, count: usize },
 
-    #[ error( "not a static, movable, land, water or raw mesh" ) ]
+    #[ error( "not a static, movable, land, interior, water or raw mesh" ) ]
     UnknownLayout,
 
     #[ error( "mesh is too large" ) ]
@@ -352,6 +354,7 @@ pub enum Mesh
     Static( StaticMesh ),
     Movable( MovableMesh ),
     Land( LandMesh ),
+    Interior( layout::interior::InteriorMesh ),
     Water( WaterMesh ),
     Raw( RawMesh ),
 }
@@ -936,7 +939,7 @@ impl WaterMesh
 impl Mesh
 {
     /// The file itself does not name its kind, the engine knows it from where the mesh is used.
-    /// Static when the file starts with a zero, otherwise movable, land, water or raw, whichever reads the whole file.
+    /// Static when the file starts with a zero, otherwise movable, land, interior, water or raw, whichever reads the whole file.
     pub fn parse( data: &[u8] ) -> Result<Self>
     {
         if data.starts_with( &STATIC_MARKER.to_le_bytes() )
@@ -950,6 +953,10 @@ impl Mesh
         if let Ok( mesh ) = LandMesh::parse( data )
         {
             return Ok( Self::Land( mesh ) );
+        }
+        if let Ok( mesh ) = layout::interior::InteriorMesh::parse( data )
+        {
+            return Ok( Self::Interior( mesh ) );
         }
         if let Ok( mesh ) = WaterMesh::parse( data )
         {
@@ -966,7 +973,7 @@ impl Mesh
             Self::Static( mesh ) => ( &mesh.surfaces, &[] ),
             Self::Movable( mesh ) => ( &mesh.surfaces, &[] ),
             Self::Land( mesh ) => ( &[], &mesh.tiles ),
-            Self::Water( _ ) | Self::Raw( _ ) => ( &[], &[] ),
+            Self::Interior( _ ) | Self::Water( _ ) | Self::Raw( _ ) => ( &[], &[] ),
         };
         surfaces.iter().chain( tiles.iter().flat_map( |tile| &tile.surfaces ) )
     }

@@ -95,3 +95,27 @@ fn decodes_every_lightmap_page()
     // 17839 in static meshes, 100 in the terrain.
     assert_eq!( pages, 17839 + 100 );
 }
+
+#[ test ]
+fn parses_every_interior()
+{
+    let Some( vfs ) = geometries() else { return };
+    let mut reader = vfs.reader().unwrap();
+    let ( mut interiors, mut pages ) = ( 0, 0 );
+    for entry in vfs.entries()
+    {
+        let Ok( Mesh::Interior( interior ) ) = Mesh::parse( &reader.read_entry( entry ).unwrap() ) else { continue };
+        let leaves = interior.leaves();
+        assert_eq!( leaves.len(), interior.leaf_count as usize, "{}", entry.path );
+
+
+        for page in interior.surfaces.iter().flat_map( |surface| &surface.lightmaps ).flat_map( |lightmap| &lightmap.pages )
+        {
+            page.decode().unwrap_or_else( |err| panic!( "{}: {err}", entry.path ) );
+            pages += 1;
+        }
+        interiors += 1;
+    }
+
+    assert_eq!( ( interiors, pages ), ( 74, 2379 ) );
+}

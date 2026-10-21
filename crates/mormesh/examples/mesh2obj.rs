@@ -4,6 +4,7 @@
 use std::fmt::Write as _;
 use std::process::ExitCode;
 
+use mormesh::layout::interior::InteriorSurface;
 use mormesh::{ Mesh, Surface };
 use morvfs::Vfs;
 
@@ -21,6 +22,19 @@ struct Group<'a>
 
 impl<'a> Group<'a>
 {
+    fn from_interior( index: usize, surface: &'a InteriorSurface ) -> Self
+    {
+        Self
+        {
+            name:      format!( "surface{index}" ),
+            texture:   surface.material.texture(),
+            positions: &surface.positions,
+            normals:   &surface.normals,
+            uvs:       &surface.uvs,
+            triangles: &surface.triangles,
+        }
+    }
+
     fn from_surface( index: usize, surface: &'a Surface ) -> Self
     {
         Self
@@ -62,6 +76,10 @@ fn groups( mesh: &Mesh ) -> Vec<Group<'_>>
             triangles: &water.triangles,
         };
         return vec![ group ];
+    }
+    if let Mesh::Interior( interior ) = mesh
+    {
+        return interior.surfaces.iter().enumerate().map( |( index, surface )| Group::from_interior( index, surface ) ).collect();
     }
     mesh.surfaces().enumerate().map( |( index, surface )| Group::from_surface( index, surface ) ).collect()
 }

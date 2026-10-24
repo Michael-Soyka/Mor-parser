@@ -74,8 +74,8 @@ fn links_city_actors_to_meshes()
         }
     }
 
-    // Lights, sounds and other non-geometry actors make up the rest.
-    assert_eq!( ( with_mesh, other ), ( 1921, 151 ) );
+    // 1921 geometry, 2 water and 53 vegetation actors; lights, sounds and others make up the rest.
+    assert_eq!( ( with_mesh, other ), ( 1921 + 2 + 53, 96 ) );
 }
 
 #[ test ]

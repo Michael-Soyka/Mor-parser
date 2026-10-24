@@ -7,6 +7,8 @@
 //! <Scene>
 //!   <Name>house1_arc_01r</Name>
 //!   <Land>zterra</Land>                                   outdoor: terrain actor
+//!   <Level>ihouse1</Level>                                interior: actor of the interior mesh
+//!   <Ambient>20 20 20</Ambient>                           interior: ambient light
 //!   <PathFinding DataFile = "city_base.osc.pfd"/>          see [`path`]
 //!   <Map FileName="city.map"/>                            outdoor, see [`map`]
 //!   <reference filename="house1_base.isc" node="Scene"/>  included in place
@@ -86,10 +88,15 @@ pub struct Scene
 {
     pub name:         Option<String>,
     pub land:         Option<String>,
+    pub level:        Option<String>,
     pub path_finding: Option<String>,
     pub map:          Option<String>,
-    pub points:       Vec<Point>,
-    pub actors:       Vec<Actor>,
+
+    /// RGB, 0 to 255.
+    pub ambient: Option<[f32; 3]>,
+
+    pub points: Vec<Point>,
+    pub actors: Vec<Actor>,
 
     /// References to other nodes than `Scene`, and before [`Scene::load`] all of them.
     pub references: Vec<Reference>,
@@ -153,12 +160,14 @@ impl Actor
     }
 }
 
-/// Element whose text is read: `<Name>` or `<Land>`.
+/// Element whose text is read: `<Name>`, `<Land>`, `<Level>` or `<Ambient>`.
 #[ derive( Clone, Copy ) ]
 enum TextField
 {
     Name,
     Land,
+    Level,
+    Ambient,
 }
 
 impl Scene
@@ -190,6 +199,8 @@ impl Scene
                     {
                         "Name" => Some( TextField::Name ),
                         "Land" => Some( TextField::Land ),
+                        "Level" => Some( TextField::Level ),
+                        "Ambient" => Some( TextField::Ambient ),
                         _ => None,
                     };
                     depth += 1;
@@ -210,6 +221,8 @@ impl Scene
                         {
                             TextField::Name => scene.name = value,
                             TextField::Land => scene.land = value,
+                            TextField::Level => scene.level = value,
+                            TextField::Ambient => scene.ambient = Some( vector( "ambient", &text )? ),
                         }
                     }
                 }
@@ -249,7 +262,7 @@ impl Scene
     }
 
     /// `file` with its `Scene` references included in place, depth first.
-    /// The including file's name, land, path finding and map win over those it includes.
+    /// The including file's name, land, level, path finding, map and ambient win over those it includes.
     pub fn load( file: &str, mut read: impl FnMut( &str ) -> Option<Vec<u8>> ) -> Result<Self>
     {
         let mut chain = Vec::new();
@@ -283,8 +296,8 @@ impl Scene
         }
         chain.pop();
 
-        let Self { name, land, path_finding, map, points, actors, references: _ } = own;
-        let own_body = Self { name, land, path_finding, map, points, actors, references: Vec::new() };
+        let Self { name, land, level, path_finding, map, ambient, points, actors, references: _ } = own;
+        let own_body = Self { name, land, level, path_finding, map, ambient, points, actors, references: Vec::new() };
         merged.absorb( own_body );
         Ok( merged )
     }
@@ -294,8 +307,10 @@ impl Scene
     {
         self.name = other.name.or( self.name.take() );
         self.land = other.land.or( self.land.take() );
+        self.level = other.level.or( self.level.take() );
         self.path_finding = other.path_finding.or( self.path_finding.take() );
         self.map = other.map.or( self.map.take() );
+        self.ambient = other.ambient.or( self.ambient.take() );
         self.points.extend( other.points );
         self.actors.extend( other.actors );
         self.references.extend( other.references );
@@ -310,6 +325,8 @@ mod tests
     const BASE: &str = r#"<Scene>
         <Name>base</Name>
         <Land>zterra</Land>
+        <Level>ihouse1</Level>
+        <Ambient>20 20 20</Ambient>
         <PathFinding DataFile = "base.pfd"/>
         <Point Name = "birth" Position = "1 2.5 -3" Direction = "0 0 1"/>
         <Actor Name = "kachely&pesochnitsa_01" StaticID = "7"/>
@@ -341,7 +358,8 @@ mod tests
     {
         let scene = Scene::parse( BASE.as_bytes() ).unwrap();
         assert_eq!( ( scene.name.as_deref(), scene.land.as_deref() ), ( Some( "base" ), Some( "zterra" ) ) );
-        assert_eq!( scene.path_finding.as_deref(), Some( "base.pfd" ) );
+        assert_eq!( ( scene.level.as_deref(), scene.path_finding.as_deref() ), ( Some( "ihouse1" ), Some( "base.pfd" ) ) );
+        assert_eq!( scene.ambient, Some( [ 20.0; 3 ] ) );
         assert_eq!( scene.points, [ Point { name: "birth".into(), position: [ 1.0, 2.5, -3.0 ], direction: [ 0.0, 0.0, 1.0 ] } ] );
         assert_eq!( scene.actors[ 0 ].name.as_deref(), Some( "kachely&pesochnitsa_01" ) );
         assert_eq!( scene.actors[ 0 ].static_id, Some( 7 ) );

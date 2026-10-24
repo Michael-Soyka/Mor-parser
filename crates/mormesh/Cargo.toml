@@ -13,7 +13,7 @@ serde_json = { version = "1.0.154", optional = true }
 thiserror = "2.0.21"
 
 [dev-dependencies]
-gltf = { version = "1.4.1", default-features = false, features = [ "names", "utils" ] }
+gltf = { version = "1.4.1", default-features = false, features = [ "KHR_lights_punctual", "names", "utils" ] }
 image = { version = "0.25.10", default-features = false, features = [ "png" ] }
 mortex = { path = "../mortex" }
 morvfs = { path = "../morvfs" }

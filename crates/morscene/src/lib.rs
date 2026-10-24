@@ -25,6 +25,8 @@ use quick_xml::events::{ BytesStart, Event };
 
 pub mod actor;
 pub mod binary;
+#[ cfg( feature = "gltf" ) ]
+pub mod gltf;
 pub mod map;
 pub mod path;
 

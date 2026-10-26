@@ -2,9 +2,9 @@
 //!
 //! The game is left-handed with clockwise front faces, glTF is right-handed with
 //! counter-clockwise ones: z is negated and every triangle is wound the other way.
-//! One primitive per surface, one node per land tile; lightmaps and bump attributes are not exported.
-//! Vegetation is exported by [`Gltf::from_detail`], one node per instance; characters in the bind pose,
-//! without the skeleton and animations.
+//! One primitive per surface, a child node per land tile; lightmaps and bump attributes are not exported.
+//! Vegetation is exported by [`Gltf::from_detail`], a child node per instance; characters in the bind pose,
+//! without the skeleton and animations. Several meshes and point lights go into one scene through [`SceneBuilder`].
 
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ use serde_json::{ Map, Value, json };
 use crate::layout::character::CharacterMesh;
 use crate::layout::detail::DetailMesh;
 use crate::layout::interior::{ InteriorMesh, InteriorSurface };
-use crate::{ Error, Material, Mesh, RawMesh, Result, Surface, WaterMesh };
+use crate::{ Error, LandMesh, Material, Mesh, RawMesh, Result, Surface, WaterMesh };
 
 const UNSIGNED_BYTE:  u32 = 5121;
 const UNSIGNED_SHORT: u32 = 5123;
@@ -33,6 +33,7 @@ const ALIGNMENT:       usize    = 4;
 const ALPHA_CUTOFF: f32 = 0.5;
 const WATER_COLOR:  [f32; 3] = [ 0.2, 0.3, 0.35 ];
 const UNLIT:        &str = "KHR_materials_unlit";
+const LIGHTS:       &str = "KHR_lights_punctual";
 
 /// Exported scene: glTF JSON plus the binary buffer it points into.
 #[ derive( Debug, Clone ) ]
@@ -48,56 +49,21 @@ impl Gltf
     /// Vegetation gives an empty scene, it needs its prototypes, see [`Gltf::from_detail`].
     pub fn from_mesh( mesh: &Mesh, name: &str, texture_png: impl FnMut( &str ) -> Option<Vec<u8>> ) -> Self
     {
-        let mut builder = Builder::new( texture_png );
-        match mesh
-        {
-            Mesh::Static( mesh ) => builder.add_node( name, &mesh.surfaces ),
-            Mesh::Movable( mesh ) => builder.add_node( name, &mesh.surfaces ),
-            Mesh::Land( land ) =>
-            {
-                for ( index, tile ) in land.tiles.iter().enumerate()
-                {
-                    builder.add_node( &format!( "{name}_tile{index}" ), &tile.surfaces );
-                }
-            }
-            Mesh::Interior( mesh ) => builder.add_interior( name, mesh ),
-            Mesh::Detail( _ ) => {}
-            Mesh::Character( mesh ) => builder.add_character( name, mesh ),
-            Mesh::Water( mesh ) => builder.add_water( name, mesh ),
-            Mesh::Raw( mesh ) => builder.add_raw( name, mesh ),
-        }
+        let mut builder = SceneBuilder::new( texture_png );
+        builder.add_mesh( mesh, name );
         builder.finish( name )
     }
 
-    /// One node per instance, sharing a mesh per prototype. `prototype` returns the raw mesh
-    /// for a prototype name, see [`DetailMesh::prototypes`]; instances of prototypes it has no mesh for are left out.
+    /// See [`SceneBuilder::add_detail`].
     pub fn from_detail(
         mesh: &DetailMesh,
         name: &str,
-        mut prototype: impl FnMut( &str ) -> Option<RawMesh>,
+        prototype: impl FnMut( &str ) -> Option<RawMesh>,
         texture_png: impl FnMut( &str ) -> Option<Vec<u8>>,
     ) -> Self
     {
-        let mut builder = Builder::new( texture_png );
-        let meshes: Vec<Option<usize>> = mesh
-            .prototypes
-            .iter()
-            .map( |prototype_name|
-            {
-                let raw = prototype( prototype_name )?;
-                builder.add_raw_geometry( &raw );
-                builder.close_mesh( prototype_name )
-            } )
-            .collect();
-
-        for instance in mesh.instances()
-        {
-            let Some( &Some( mesh ) ) = meshes.get( usize::from( instance.prototype ) ) else { continue };
-            let [ x, y, z, w ] = instance.rotation();
-            let rotation = [ -x, -y, z, w ];
-            let node = json!( { "mesh": mesh, "translation": to_right_handed( instance.position ), "rotation": rotation } );
-            builder.nodes.push( node );
-        }
+        let mut builder = SceneBuilder::new( texture_png );
+        builder.add_detail( mesh, name, prototype );
         builder.finish( name )
     }
 
@@ -246,7 +212,23 @@ impl<'a> Geometry<'a>
     }
 }
 
-struct Builder<F>
+/// Point light for [`SceneBuilder::add_lights`].
+#[ derive( Debug, Clone, PartialEq ) ]
+pub struct Light
+{
+    pub name:     String,
+    pub position: [f32; 3],
+
+    /// Linear RGB, 0 to 1.
+    pub color: [f32; 3],
+
+    /// Distance where the light ends, positive.
+    pub range: f32,
+}
+
+/// Meshes collected into one scene, a root node each, placed as stored: the game keeps
+/// scene geometry in world coordinates. Textures and vegetation prototypes are shared by all of them.
+pub struct SceneBuilder<F>
 {
     texture_png: F,
     bin:         Vec<u8>,
@@ -258,31 +240,104 @@ struct Builder<F>
     primitives:  Vec<Value>,
     meshes:      Vec<Value>,
     nodes:       Vec<Value>,
+    roots:       Vec<usize>,
+    lights:      Vec<Value>,
     uses_unlit:  bool,
 
     /// Texture index by name; `None` when the callback had no image for it.
     texture_by_name: HashMap<String, Option<usize>>,
+
+    /// Mesh index by vegetation prototype name; `None` when the callback had no mesh for it.
+    prototype_by_name: HashMap<String, Option<usize>>,
 }
 
-impl<F: FnMut( &str ) -> Option<Vec<u8>>> Builder<F>
+impl<F: FnMut( &str ) -> Option<Vec<u8>>> SceneBuilder<F>
 {
-    fn new( texture_png: F ) -> Self
+    /// `texture_png` returns PNG bytes for a texture name; `None` leaves the material untextured.
+    pub fn new( texture_png: F ) -> Self
     {
         Self
         {
             texture_png,
-            bin:             Vec::new(),
-            views:           Vec::new(),
-            accessors:       Vec::new(),
-            images:          Vec::new(),
-            textures:        Vec::new(),
-            materials:       Vec::new(),
-            primitives:      Vec::new(),
-            meshes:          Vec::new(),
-            nodes:           Vec::new(),
-            uses_unlit:      false,
-            texture_by_name: HashMap::new(),
+            bin:               Vec::new(),
+            views:             Vec::new(),
+            accessors:         Vec::new(),
+            images:            Vec::new(),
+            textures:          Vec::new(),
+            materials:         Vec::new(),
+            primitives:        Vec::new(),
+            meshes:            Vec::new(),
+            nodes:             Vec::new(),
+            roots:             Vec::new(),
+            lights:            Vec::new(),
+            uses_unlit:        false,
+            texture_by_name:   HashMap::new(),
+            prototype_by_name: HashMap::new(),
         }
+    }
+
+    /// Vegetation is left out, it needs its prototypes, see [`SceneBuilder::add_detail`].
+    pub fn add_mesh( &mut self, mesh: &Mesh, name: &str )
+    {
+        match mesh
+        {
+            Mesh::Static( mesh ) => self.add_surfaces( name, &mesh.surfaces ),
+            Mesh::Movable( mesh ) => self.add_surfaces( name, &mesh.surfaces ),
+            Mesh::Land( land ) => self.add_land( name, land ),
+            Mesh::Interior( mesh ) => self.add_interior( name, mesh ),
+            Mesh::Detail( _ ) => {}
+            Mesh::Character( mesh ) => self.add_character( name, mesh ),
+            Mesh::Water( mesh ) => self.add_water( name, mesh ),
+            Mesh::Raw( mesh ) => self.add_raw( name, mesh ),
+        }
+    }
+
+    /// One node per instance, sharing a mesh per prototype. `prototype` returns the raw mesh
+    /// for a prototype name, see [`DetailMesh::prototypes`]; instances of prototypes it has no mesh for are left out.
+    pub fn add_detail( &mut self, mesh: &DetailMesh, name: &str, mut prototype: impl FnMut( &str ) -> Option<RawMesh> )
+    {
+        let meshes: Vec<Option<usize>> = mesh
+            .prototypes
+            .iter()
+            .map( |prototype_name| self.prototype_mesh( prototype_name, &mut prototype ) )
+            .collect();
+
+        let mut instances = Vec::new();
+        for instance in mesh.instances()
+        {
+            let Some( &Some( mesh ) ) = meshes.get( usize::from( instance.prototype ) ) else { continue };
+            let [ x, y, z, w ] = instance.rotation();
+            let rotation = [ -x, -y, z, w ];
+            let node = json!( { "mesh": mesh, "translation": to_right_handed( instance.position ), "rotation": rotation } );
+            instances.push( self.push_node( node ) );
+        }
+        self.add_group( name, instances );
+    }
+
+    /// Empty nodes at the given positions, children of one node named `name`.
+    pub fn add_points<'a>( &mut self, name: &str, points: impl IntoIterator<Item = ( &'a str, [f32; 3] )> )
+    {
+        let children = points
+            .into_iter()
+            .map( |( point, position )| self.push_node( json!( { "name": point, "translation": to_right_handed( position ) } ) ) )
+            .collect();
+        self.add_group( name, children );
+    }
+
+    /// Point lights, children of one node named `name`. The game stores no intensity:
+    /// it is set so that a light gives 1 lux at its range.
+    pub fn add_lights( &mut self, name: &str, lights: impl IntoIterator<Item = Light> )
+    {
+        let children = lights
+            .into_iter()
+            .map( |Light { name: light_name, position, color, range }|
+            {
+                self.lights.push( json!( { "type": "point", "color": color, "intensity": range * range, "range": range } ) );
+                let light = self.lights.len() - 1;
+                self.push_node( json!( { "name": light_name, "translation": to_right_handed( position ), "extensions": { LIGHTS: { "light": light } } } ) )
+            } )
+            .collect();
+        self.add_group( name, children );
     }
 
     fn add_view( &mut self, bytes: &[u8], target: Option<u32> ) -> usize
@@ -438,13 +493,54 @@ impl<F: FnMut( &str ) -> Option<Vec<u8>>> Builder<F>
         Some( self.meshes.len() - 1 )
     }
 
-    /// Turns the primitives added so far into a mesh with its own node.
-    fn close_node( &mut self, name: &str )
+    fn push_node( &mut self, node: Value ) -> usize
     {
-        if let Some( mesh ) = self.close_mesh( name )
+        self.nodes.push( node );
+        self.nodes.len() - 1
+    }
+
+    /// Turns the primitives added so far into a mesh with its own node.
+    fn close_node( &mut self, name: &str ) -> Option<usize>
+    {
+        let mesh = self.close_mesh( name )?;
+        Some( self.push_node( json!( { "name": name, "mesh": mesh } ) ) )
+    }
+
+    /// Turns the primitives added so far into a mesh with its own root node.
+    fn close_root( &mut self, name: &str )
+    {
+        if let Some( node ) = self.close_node( name )
         {
-            self.nodes.push( json!( { "name": name, "mesh": mesh } ) );
+            self.roots.push( node );
         }
+    }
+
+    /// Root node over `children`, left out when there are none.
+    fn add_group( &mut self, name: &str, children: Vec<usize> )
+    {
+        if children.is_empty()
+        {
+            return;
+        }
+
+        let root = self.push_node( json!( { "name": name, "children": children } ) );
+        self.roots.push( root );
+    }
+
+    fn prototype_mesh( &mut self, name: &str, prototype: &mut impl FnMut( &str ) -> Option<RawMesh> ) -> Option<usize>
+    {
+        if let Some( &cached ) = self.prototype_by_name.get( name )
+        {
+            return cached;
+        }
+
+        let mesh = prototype( name ).and_then( |raw|
+        {
+            self.add_raw_geometry( &raw );
+            self.close_mesh( name )
+        } );
+        self.prototype_by_name.insert( name.to_owned(), mesh );
+        mesh
     }
 
     fn add_geometry( &mut self, geometry: &Geometry )
@@ -473,13 +569,27 @@ impl<F: FnMut( &str ) -> Option<Vec<u8>>> Builder<F>
         self.add_primitive( attributes, geometry.triangles, material );
     }
 
-    fn add_node( &mut self, name: &str, surfaces: &[Surface] )
+    fn add_surfaces( &mut self, name: &str, surfaces: &[Surface] )
     {
         for surface in surfaces
         {
             self.add_geometry( &Geometry::from_surface( surface ) );
         }
-        self.close_node( name );
+        self.close_root( name );
+    }
+
+    fn add_land( &mut self, name: &str, land: &LandMesh )
+    {
+        let mut tiles = Vec::new();
+        for ( index, tile ) in land.tiles.iter().enumerate()
+        {
+            for surface in &tile.surfaces
+            {
+                self.add_geometry( &Geometry::from_surface( surface ) );
+            }
+            tiles.extend( self.close_node( &format!( "{name}_tile{index}" ) ) );
+        }
+        self.add_group( name, tiles );
     }
 
     fn add_interior( &mut self, name: &str, mesh: &InteriorMesh )
@@ -488,7 +598,7 @@ impl<F: FnMut( &str ) -> Option<Vec<u8>>> Builder<F>
         {
             self.add_geometry( &Geometry::from_interior( surface ) );
         }
-        self.close_node( name );
+        self.close_root( name );
     }
 
     fn add_character( &mut self, name: &str, mesh: &CharacterMesh )
@@ -505,7 +615,7 @@ impl<F: FnMut( &str ) -> Option<Vec<u8>>> Builder<F>
             double_sided: false,
         };
         self.add_geometry( &geometry );
-        self.close_node( name );
+        self.close_root( name );
     }
 
     /// Water has no texture of its own: plain colour, seen from both sides.
@@ -523,13 +633,13 @@ impl<F: FnMut( &str ) -> Option<Vec<u8>>> Builder<F>
             double_sided: true,
         };
         self.add_geometry( &geometry );
-        self.close_node( name );
+        self.close_root( name );
     }
 
     fn add_raw( &mut self, name: &str, mesh: &RawMesh )
     {
         self.add_raw_geometry( mesh );
-        self.close_node( name );
+        self.close_root( name );
     }
 
     /// Raw meshes are leaves and water plants: one-sided cards seen from both sides.
@@ -549,14 +659,14 @@ impl<F: FnMut( &str ) -> Option<Vec<u8>>> Builder<F>
         self.add_geometry( &geometry );
     }
 
-    fn finish( mut self, name: &str ) -> Gltf
+    pub fn finish( mut self, name: &str ) -> Gltf
     {
-        if self.nodes.is_empty()
+        if self.roots.is_empty()
         {
-            self.nodes.push( json!( { "name": name } ) );
+            let root = self.push_node( json!( { "name": name } ) );
+            self.roots.push( root );
         }
-        let scene_nodes: Vec<usize> = ( 0..self.nodes.len() ).collect();
-        let mut json = json!( { "asset": { "version": "2.0", "generator": "mormesh" }, "scene": 0, "scenes": [ { "nodes": scene_nodes } ] } );
+        let mut json = json!( { "asset": { "version": "2.0", "generator": "mormesh" }, "scene": 0, "scenes": [ { "name": name, "nodes": self.roots } ] } );
         json[ "nodes" ] = self.nodes.into();
 
         let arrays =
@@ -572,9 +682,19 @@ impl<F: FnMut( &str ) -> Option<Vec<u8>>> Builder<F>
         {
             json[ key ] = items.into();
         }
+        let mut extensions = Vec::new();
         if self.uses_unlit
         {
-            json[ "extensionsUsed" ] = json!( [ UNLIT ] );
+            extensions.push( UNLIT );
+        }
+        if !self.lights.is_empty()
+        {
+            extensions.push( LIGHTS );
+            json[ "extensions" ] = json!( { LIGHTS: { "lights": self.lights } } );
+        }
+        if !extensions.is_empty()
+        {
+            json[ "extensionsUsed" ] = extensions.into();
         }
 
         Gltf { json, bin: self.bin }
@@ -629,6 +749,21 @@ mod tests
         assert_eq!( material.alpha_mode(), ::gltf::material::AlphaMode::Mask );
         assert!( material.double_sided() );
         assert!( material.pbr_metallic_roughness().base_color_texture().is_some() );
+    }
+
+    #[ test ]
+    fn writes_point_lights()
+    {
+        let mut builder = SceneBuilder::new( fake_png );
+        let light = Light { name: "lamp".into(), position: [ 1.0, 2.0, 3.0 ], color: [ 1.0, 0.5, 0.0 ], range: 10.0 };
+        builder.add_lights( "lights", [ light ] );
+        let glb = builder.finish( "scene" ).to_glb().unwrap();
+
+        let document = ::gltf::Gltf::from_slice( &glb ).unwrap().document;
+        let lamp = document.nodes().find( |node| node.name() == Some( "lamp" ) ).unwrap();
+        assert_eq!( lamp.transform().decomposed().0, [ 1.0, 2.0, -3.0 ] );
+        let light = lamp.light().unwrap();
+        assert_eq!( ( light.color(), light.range(), light.intensity() ), ( [ 1.0, 0.5, 0.0 ], Some( 10.0 ), 100.0 ) );
     }
 
     #[ test ]

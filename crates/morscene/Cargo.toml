@@ -3,11 +3,26 @@ name = "morscene"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+gltf = [ "dep:mormesh", "mormesh/gltf" ]
+
 [dependencies]
 encoding_rs = "0.8.42"
 flate2 = "1.1.10"
+mormesh = { path = "../mormesh", optional = true }
 quick-xml = "0.42.0"
 thiserror = "2.0.21"
 
 [dev-dependencies]
+gltf = { version = "1.4.1", default-features = false, features = [ "KHR_lights_punctual", "names", "utils" ] }
+image = { version = "0.25.10", default-features = false, features = [ "png" ] }
+mortex = { path = "../mortex" }
 morvfs = { path = "../morvfs" }
+
+[[example]]
+name = "scene2gltf"
+required-features = [ "gltf" ]
+
+[[test]]
+name = "gltf"
+required-features = [ "gltf" ]

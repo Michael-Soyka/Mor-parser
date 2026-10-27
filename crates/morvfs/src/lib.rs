@@ -246,16 +246,7 @@ impl Vfs
     pub fn open( path: impl AsRef<Path> ) -> Result<Self>
     {
         let path = path.as_ref().to_path_buf();
-        let mut reader = BufReader::new( File::open( &path )? );
-
-        let signature: [u8; SIGNATURE.len()] = read_array( &mut reader )?;
-        if signature != SIGNATURE
-        {
-            return Err( Error::BadSignature );
-        }
-
-        let mut entries = IndexMap::new();
-        read_node( &mut reader, "", &mut entries )?;
+        let entries = read_directory( &mut BufReader::new( File::open( &path )? ) )?;
         Ok( Self { path, entries } )
     }
 
@@ -365,7 +356,27 @@ impl VfsReader<'_>
     }
 }
 
-fn read_entry_into( archive: &mut ( impl Read + Seek ), entry: &Entry, data: &mut Vec<u8> ) -> Result<()>
+/// Entries of an archive read from the start of `reader`, in on-disk order; for archives not on disk, e.g. in memory.
+pub fn read_entries( reader: &mut impl Read ) -> Result<Vec<Entry>>
+{
+    Ok( read_directory( reader )?.into_values().collect() )
+}
+
+fn read_directory( reader: &mut impl Read ) -> Result<IndexMap<String, Entry>>
+{
+    let signature: [u8; SIGNATURE.len()] = read_array( reader )?;
+    if signature != SIGNATURE
+    {
+        return Err( Error::BadSignature );
+    }
+
+    let mut entries = IndexMap::new();
+    read_node( reader, "", &mut entries )?;
+    Ok( entries )
+}
+
+/// Replaces the contents of `data` with the entry read from `archive`, keeping its allocation.
+pub fn read_entry_into( archive: &mut ( impl Read + Seek ), entry: &Entry, data: &mut Vec<u8> ) -> Result<()>
 {
     let size = usize::try_from( entry.size ).map_err( |_| Error::TooLarge )?;
 
